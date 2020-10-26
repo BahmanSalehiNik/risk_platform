@@ -79,21 +79,32 @@ def nan_binary_func(x):
     else:
         return 0
 
+def get_stock_trade(ticker):
+    stock_trades_df = pd.DataFrame(AdjustedData.objects.filter(stock__ticker=ticker).values())
+    stock_trades_df = stock_trades_df.astype(
+        {'time': 'datetime64[ns]'})
+    stock_trades_df['nan_binary'] = None
+    stock_trades_df['nan_ahead'] = 0
+    stock_trades_df['nan_binary'] = list(map(nan_binary_func, stock_trades_df['close_adjusted']))
+    stock_trades_df.sort_values(by=['time'], ascending=True, inplace=True)
+    stock_trades_df.reset_index(drop=True, inplace=True)
+    for index, row in stock_trades_df.iterrows():
+        if index == 0:
+            stock_trades_df.loc[index, 'nan_ahead'] = row['nan_binary']
+        else:
+            stock_trades_df.loc[index, 'nan_ahead'] = (stock_trades_df.loc[index - 1, 'nan_ahead'] + row[
+                'nan_binary']) * row['nan_binary']
+
+    stock_trades_df.sort_values(by=['time'], ascending=False, inplace=True)
+    stock_trades_df.reset_index(drop=True, inplace=True)
+
+    for index, row in stock_trades_df.iterrows():
+        if row['nan_ahead']!=0 and index != 0:
+            stock_trades_df.loc[index,'vwap_adjusted'] = stock_trades_df.loc[index-1,'vwap_adjusted'] + (stock_trades_df.loc[(int(index) + int(row['nan_ahead'])), 'vwap_adjusted'] - stock_trades_df.loc[index-1,'vwap_adjusted']) / row['nan_ahead']
+    return stock_trades_df
+
+
 class GetStockTrade(View):
     def get(self, request, ticker):
-        stock_trades_df = pd.DataFrame(AdjustedData.objects.filter(stock__ticker=ticker).values())
-        stock_trades_df = stock_trades_df.astype(
-            {'time': 'datetime64[ns]'})
-        stock_trades_df['nan_binary']=None
-        stock_trades_df['nan_ahead'] = 0
-        stock_trades_df['nan_binary'] = list(map(nan_binary_func, stock_trades_df['close_adjusted']))
-        stock_trades_df.sort_values(by=['time'], ascending=True, inplace=True)
-        stock_trades_df.reset_index(drop=True, inplace=True)
-        for index, row in stock_trades_df.iterrows():
-            if index==0:
-                stock_trades_df.loc[index,'nan_ahead'] = row['nan_binary']
-            else:
-                stock_trades_df.loc[index, 'nan_ahead'] = (stock_trades_df.loc[index - 1, 'nan_ahead'] + row['nan_binary']) * row['nan_binary']
-        stock_trades_df.sort_values(by=['time'], ascending=False, inplace=True)
-        stock_trades_df.reset_index(drop=True, inplace=True)
+        df_ticker_trades = get_stock_trade(ticker)
         return JsonResponse({'test':'ok'}, status=200, safe=False)
