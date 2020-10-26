@@ -80,7 +80,7 @@ def nan_binary_func(x):
         return 0
 
 def get_stock_trade(ticker):
-    stock_trades_df = pd.DataFrame(AdjustedData.objects.filter(stock__ticker=ticker).values())
+    stock_trades_df = pd.DataFrame(AdjustedData.objects.filter(stock__ticker=ticker, time__gte=timezone.now()-timedelta(days=365)).values())
     stock_trades_df = stock_trades_df.astype(
         {'time': 'datetime64[ns]'})
     stock_trades_df['nan_binary'] = None
@@ -108,3 +108,19 @@ class GetStockTrade(View):
     def get(self, request, ticker):
         df_ticker_trades = get_stock_trade(ticker)
         return JsonResponse({'test':'ok'}, status=200, safe=False)
+
+
+class GetPortfolioVar(View):
+    def get(self, request, portfolio_id):
+        url = 'http://192.168.10.23:8000/getlastcdsasset/{0}'.format(portfolio_id)
+        portfolio = requests.get(url).json()
+        data_df = pd.DataFrame(portfolio['data'])
+        data_df = data_df[data_df['insMaxLCode']!='-']
+        trade_df_dict = {}
+        df_historical_portfolio = pd.DataFrame()
+        for index, row in data_df.iterrows():
+            trade_df_dict[row['insMaxLCode']] = get_stock_trade(row['insMaxLCode'])
+            trade_df_dict[row['insMaxLCode']]['target_value'] = trade_df_dict[row['insMaxLCode']]['vwap_adjusted']*row['quantity']
+            df_historical_portfolio[row['insMaxLCode']] = trade_df_dict[row['insMaxLCode']]['vwap_adjusted']*row['quantity']
+            df_historical_portfolio[row['insMaxLCode'] + 'time' ] = trade_df_dict[row['insMaxLCode']]['time']
+        return JsonResponse({'test': 'ok'}, status=200, safe=False)
