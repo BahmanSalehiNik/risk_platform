@@ -110,8 +110,25 @@ class GetStockTrade(View):
         return JsonResponse({'test':'ok'}, status=200, safe=False)
 
 
+def trunc_datetime(someDate):
+    return someDate.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
 class GetPortfolioVar(View):
     def get(self, request, portfolio_id):
+        last_stock = Stock.objects.all().order_by('last_update_data').first()
+        if last_stock.last_update_data is None:
+            last_stock_update_date = settings.START_DATA_DATE
+        else:
+            last_stock_update_date = last_stock.last_update_data + timedelta(days=1)
+
+        #today_datetime = datetime.now()
+        start_date = last_stock_update_date - timedelta(days=360)
+        base_df = pd.DataFrame()
+        date_column = pd.date_range(start_date, last_stock_update_date)
+        base_df['time'] = list(map(trunc_datetime,date_column))
+        base_df = base_df.astype(
+            {'time': 'datetime64[ns]'})
         url = 'http://192.168.10.23:8000/getlastcdsasset/{0}'.format(portfolio_id)
         portfolio = requests.get(url).json()
         data_df = pd.DataFrame(portfolio['data'])
@@ -119,8 +136,18 @@ class GetPortfolioVar(View):
         trade_df_dict = {}
         df_historical_portfolio = pd.DataFrame()
         for index, row in data_df.iterrows():
-            trade_df_dict[row['insMaxLCode']] = get_stock_trade(row['insMaxLCode'])
-            trade_df_dict[row['insMaxLCode']]['target_value'] = trade_df_dict[row['insMaxLCode']]['vwap_adjusted']*row['quantity']
-            df_historical_portfolio[row['insMaxLCode']] = trade_df_dict[row['insMaxLCode']]['vwap_adjusted']*row['quantity']
-            df_historical_portfolio[row['insMaxLCode'] + 'time' ] = trade_df_dict[row['insMaxLCode']]['time']
+            temp_df = get_stock_trade(row['insMaxLCode'])
+            temp_df['time'] = list(map(trunc_datetime, temp_df['time']))
+            base_df[row['insMaxLCode']] = None
+            for index_base, row_base in base_df.iterrows():
+                temp_target = temp_df[temp_df['time']==row_base['time']]
+                if len(temp_target)!= 0:
+                    temp_target.reset_index(inplace=True, drop=True)
+                    base_df.loc[index_base, row['insMaxLCode']] = temp_target.loc[0, 'vwap_adjusted']*row['quantity']
+
+            #trade_df_dict[row['insMaxLCode']] = get_stock_trade(row['insMaxLCode'])
+            #trade_df_dict[row['insMaxLCode']]['target_value'] = trade_df_dict[row['insMaxLCode']]['vwap_adjusted']*row['quantity']
+            #trade_df_dict[row['insMaxLCode']]['time'] = list(map(trunc_datetime,trade_df_dict[row['insMaxLCode']]['time']))
+            #df_historical_portfolio[row['insMaxLCode']] = trade_df_dict[row['insMaxLCode']]['vwap_adjusted']*row['quantity']
+            #df_historical_portfolio[row['insMaxLCode'] + 'time' ] = trade_df_dict[row['insMaxLCode']]['time']
         return JsonResponse({'test': 'ok'}, status=200, safe=False)
