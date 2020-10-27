@@ -81,27 +81,29 @@ def nan_binary_func(x):
 
 def get_stock_trade(ticker):
     stock_trades_df = pd.DataFrame(AdjustedData.objects.filter(stock__ticker=ticker, time__gte=timezone.now()-timedelta(days=365)).values())
-    stock_trades_df = stock_trades_df.astype(
-        {'time': 'datetime64[ns]'})
-    stock_trades_df['nan_binary'] = None
-    stock_trades_df['nan_ahead'] = 0
-    stock_trades_df['nan_binary'] = list(map(nan_binary_func, stock_trades_df['close_adjusted']))
-    stock_trades_df.sort_values(by=['time'], ascending=True, inplace=True)
-    stock_trades_df.reset_index(drop=True, inplace=True)
-    for index, row in stock_trades_df.iterrows():
-        if index == 0:
-            stock_trades_df.loc[index, 'nan_ahead'] = row['nan_binary']
-        else:
-            stock_trades_df.loc[index, 'nan_ahead'] = (stock_trades_df.loc[index - 1, 'nan_ahead'] + row[
-                'nan_binary']) * row['nan_binary']
+    if len(stock_trades_df) != 0:
+        stock_trades_df = stock_trades_df.astype(
+            {'time': 'datetime64[ns]'})
+        stock_trades_df['nan_binary'] = None
+        stock_trades_df['nan_ahead'] = 0
+        stock_trades_df['nan_binary'] = list(map(nan_binary_func, stock_trades_df['close_adjusted']))
+        stock_trades_df.sort_values(by=['time'], ascending=True, inplace=True)
+        stock_trades_df.reset_index(drop=True, inplace=True)
+        for index, row in stock_trades_df.iterrows():
+            if index == 0:
+                stock_trades_df.loc[index, 'nan_ahead'] = row['nan_binary']
+            else:
+                stock_trades_df.loc[index, 'nan_ahead'] = (stock_trades_df.loc[index - 1, 'nan_ahead'] + row[
+                    'nan_binary']) * row['nan_binary']
 
-    stock_trades_df.sort_values(by=['time'], ascending=False, inplace=True)
-    stock_trades_df.reset_index(drop=True, inplace=True)
+        stock_trades_df.sort_values(by=['time'], ascending=False, inplace=True)
+        stock_trades_df.reset_index(drop=True, inplace=True)
 
-    for index, row in stock_trades_df.iterrows():
-        if row['nan_ahead']!=0 and index != 0:
-            stock_trades_df.loc[index,'vwap_adjusted'] = stock_trades_df.loc[index-1,'vwap_adjusted'] + (stock_trades_df.loc[(int(index) + int(row['nan_ahead'])), 'vwap_adjusted'] - stock_trades_df.loc[index-1,'vwap_adjusted']) / row['nan_ahead']
+        for index, row in stock_trades_df.iterrows():
+            if row['nan_ahead']!=0 and index != 0:
+                stock_trades_df.loc[index,'vwap_adjusted'] = stock_trades_df.loc[index-1,'vwap_adjusted'] + (stock_trades_df.loc[(int(index) + int(row['nan_ahead'])), 'vwap_adjusted'] - stock_trades_df.loc[index-1,'vwap_adjusted']) / row['nan_ahead']
     return stock_trades_df
+
 
 
 class GetStockTrade(View):
@@ -137,17 +139,39 @@ class GetPortfolioVar(View):
         df_historical_portfolio = pd.DataFrame()
         for index, row in data_df.iterrows():
             temp_df = get_stock_trade(row['insMaxLCode'])
-            temp_df['time'] = list(map(trunc_datetime, temp_df['time']))
-            base_df[row['insMaxLCode']] = None
-            for index_base, row_base in base_df.iterrows():
-                temp_target = temp_df[temp_df['time']==row_base['time']]
-                if len(temp_target)!= 0:
-                    temp_target.reset_index(inplace=True, drop=True)
-                    base_df.loc[index_base, row['insMaxLCode']] = temp_target.loc[0, 'vwap_adjusted']*row['quantity']
+            if len(temp_df)!=0:
+                temp_df['time'] = list(map(trunc_datetime, temp_df['time']))
+                base_df[row['insMaxLCode']] = None
+                for index_base, row_base in base_df.iterrows():
+                    temp_target = temp_df[temp_df['time']==row_base['time']]
+                    if len(temp_target)!= 0:
+                        temp_target.reset_index(inplace=True, drop=True)
+                        base_df.loc[index_base, row['insMaxLCode']] = temp_target.loc[0, 'vwap_adjusted']*row['quantity']
+        base_df = base_df.dropna(subset=base_df.columns[1:], how='all')
+        # Dropping columns with more than 50 Nans
+        drop_list = []
+        drop_weight_sum = 0 # return error if we are dropping more than 30% of the portfolio
+        for c in base_df.columns[1:]:
+            if base_df[c].isna().sum() >= 50:
+                c_weight_df = data_df[data_df['insMaxLCode']==c]
+                if len(c_weight_df) > 0:
+                    c_weight_df.reset_index(inplace=True, drop=True)
+                    drop_weight_sum += c_weight_df.loc[0,'percentage']
+                    if drop_weight_sum >= 30:
+                        return JsonResponse({'error': 'Dropping more than 30% of the portfolio, the model is not valid anymore!'}, status=500, safe=False)
+                drop_list.append(c)
+        if len(drop_list) > 0:
+            base_df =base_df.drop(columns=drop_list)
+        base_df = base_df.dropna(how='any')
+        base_df['hist_value'] = 0
+        for c in base_df.columns[1:]:
+            base_df['hist_value'] += base_df[c]
 
-            #trade_df_dict[row['insMaxLCode']] = get_stock_trade(row['insMaxLCode'])
-            #trade_df_dict[row['insMaxLCode']]['target_value'] = trade_df_dict[row['insMaxLCode']]['vwap_adjusted']*row['quantity']
-            #trade_df_dict[row['insMaxLCode']]['time'] = list(map(trunc_datetime,trade_df_dict[row['insMaxLCode']]['time']))
-            #df_historical_portfolio[row['insMaxLCode']] = trade_df_dict[row['insMaxLCode']]['vwap_adjusted']*row['quantity']
-            #df_historical_portfolio[row['insMaxLCode'] + 'time' ] = trade_df_dict[row['insMaxLCode']]['time']
-        return JsonResponse({'test': 'ok'}, status=200, safe=False)
+        base_df['hist_value(-1)'] = base_df['hist_value'].shift(1)
+        base_df['raw_returns'] = base_df['hist_value'] / base_df['hist_value(-1)']
+        base_df['ln_returns'] = list(map(math.log, base_df['raw_returns']))
+        base_df['ln_returns'].dropna(inplace=True)
+        portfolio_variance = base_df['ln_returns'].var()
+        sigma = math.sqrt(portfolio_variance)
+        value_at_risk = base_df.tail(1)['hist_value'] * sigma * 1.645
+        return JsonResponse({'value_at_risk': str(round(float(value_at_risk)))}, status=200, safe=False)
