@@ -45,3 +45,4 @@ def get_ticker_quotes(ticker, start_date, end_date):
 if __name__=="__main__":
     data = get_ticker_quotes('IRO1GDIR0001', '20200520', '20200526')
     print(data)
+    #just for test!
